@@ -1,0 +1,26 @@
+name: Run Binance Web3 Bot 24/7
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # يعمل كل 6 ساعات تلقائياً
+  workflow_dispatch:        # يتيح لك التشغيل اليدوي في أي وقت
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: |
+          pip install requests
+
+      - name: Run Bot Script
+        run: |
+          python Mashal.py
