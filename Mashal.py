@@ -9,7 +9,7 @@ TELEGRAM_BOT_TOKEN = "8695941579:AAF3dMqXMB6kMzuVXFvg5yBMqFltUZ0vOz8"
 TELEGRAM_CHAT_ID = "1777406294"
 
 CHECK_INTERVAL = 5             # فحص الإعلانات كل 5 ثوانٍ
-HEARTBEAT_INTERVAL = 1800      # تقرير الحالة والعملات اليومية (كل 30 دقيقة)
+HEARTBEAT_INTERVAL = 18000      # تقرير الحالة والعملات اليومية (كل 300 دقيقة)
 
 BINANCE_ANNOUNCEMENTS_API = "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=20"
 
