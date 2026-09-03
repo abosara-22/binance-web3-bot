@@ -1,22 +1,18 @@
 import time
 import requests
 import logging
+import threading
 from datetime import datetime, timedelta
 
 # ==================== Credentials & Settings ====================
 TELEGRAM_BOT_TOKEN = "8695941579:AAF3dMqXMB6kMzuVXFvg5yBMqFltUZ0vOz8"
 TELEGRAM_CHAT_ID = "1777406294"
 
-CHECK_INTERVAL = 5             # فحص الإعلانات الجديدة
-HEARTBEAT_INTERVAL = 1800      # رسالة التأكيد (كل 30 دقيقة)
-REPORT_INTERVAL = 21600        # إرسال التقرير الشامل (كل 6 ساعات)
+CHECK_INTERVAL = 5             # فحص الإعلانات كل 5 ثوانٍ
+HEARTBEAT_INTERVAL = 1800      # تقرير الحالة والعملات اليومية (كل 30 دقيقة)
 
-REPORT_DAYS_WINDOW = 10        # مدة التقرير بالأيام
+BINANCE_ANNOUNCEMENTS_API = "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=20"
 
-# رابط إعلانات بينانس المباشر والرسمي
-BINANCE_ANNOUNCEMENTS_API = "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query?catalogId=48&pageNo=1&pageSize=15"
-
-# سجل المقالات والإعلانات المكتشفة
 known_articles_db = {}
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -53,61 +49,66 @@ def fetch_binance_announcements():
         logging.error(f"API Error fetching announcements: {e}")
     return []
 
-def send_announcement_alert(article):
-    """تنبيه فوري عند صدور إعلان إدراج أو مشروع جديد"""
+def repeat_alert_task(article):
+    """تكرار التنبيه 5 مرات متتالية بين كل تنبيه 5 دقائق"""
     title = article.get("title", "بدون عنوان")
     code = article.get("code", "")
     article_id = article.get("id", "")
     article_url = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com/en/support/announcement"
-    
-    message = (
-        f"🚨 **تنبيه إعلان جديد من بينانس!** 🚨\n\n"
-        f"📌 **العنوان:** {title}\n"
-        f"🆔 **معرف الإعلان:** `{article_id}`\n\n"
-        f"🔗 [عرض الإعلان المباشر على بينانس]({article_url})\n\n"
-        f"⚡ *تابع المنصة والتداول فوراً لمواكبة التحديث.*"
-    )
-    send_telegram_message(message)
 
-def generate_and_send_report():
-    """توليد وإرسال التقرير الشامل للإعلانات المكتشفة"""
-    logging.info(f"Generating {REPORT_DAYS_WINDOW}-day comprehensive report...")
-    
-    now = datetime.now()
-    days_ago = now - timedelta(days=REPORT_DAYS_WINDOW)
-    
-    recent_articles = []
-    for art_id, info in known_articles_db.items():
-        detected_time = info.get("detected_at", now)
-        if detected_time >= days_ago:
-            recent_articles.append(info)
-            
-    recent_articles.sort(key=lambda x: x.get("detected_at", now), reverse=True)
-    
-    if not recent_articles:
-        send_telegram_message(f"📊 **تقرير الـ {REPORT_DAYS_WINDOW} أيام الماضية:**\n\nلم يتم رصد إعلانات جديدة خلال هذه الفترة.")
-        return
-
-    header_msg = (
-        f"📊 **التقرير التحليلي للإعلانات (آخر {REPORT_DAYS_WINDOW} أيام)** 📊\n"
-        f"📅 **التاريخ:** {now.strftime('%Y-%m-%d %H:%M')}\n"
-        f"🔢 **إجمالي الإعلانات المكتشفة:** {len(recent_articles)}\n"
-        f"----------------------------------------"
-    )
-    send_telegram_message(header_msg)
-
-    for idx, art_data in enumerate(recent_articles, 1):
-        det_time = art_data["detected_at"].strftime("%Y-%m-%d %H:%M")
-        code = art_data.get("code", "")
-        article_url = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com/en/support/announcement"
-
-        item_msg = (
-            f"📌 **#{idx} {art_data['title']}**\n"
-            f"⏰ **وقت الرصد:** `{det_time}`\n"
-            f"🔗 [رابط المقال]({article_url})"
+    for i in range(1, 6):
+        message = (
+            f"🚨 **تنبيه هام: إعلان جديد في بينانس! (إشعار {i}/5)** 🚨\n\n"
+            f"📌 **العنوان:** {title}\n"
+            f"🆔 **معرف الإعلان:** `{article_id}`\n\n"
+            f"🔗 [عرض الإعلان المباشر على بينانس]({article_url})\n\n"
+            f"⚡ *تنبيه مكرر لضمان الانتباه والتحرك السريع.*"
         )
-        send_telegram_message(item_msg)
-        time.sleep(1)
+        send_telegram_message(message)
+        if i < 5:
+            time.sleep(300)  # الانتظار 5 دقائق (300 ثانية) قبل التكرار التالي
+
+def trigger_repeated_alert(article):
+    """تشغيل تكرار التنبيهات في مسار خلفي لعدم تعطيل الفحص الرئيسي"""
+    threading.Thread(target=repeat_alert_task, args=(article,), daemon=True).start()
+
+def send_daily_status_report():
+    """تقرير كل 30 دقيقة يحتوي على كافة الإعلانات والعملات المدرجة اليوم مرتبة تصاعدياً"""
+    now = datetime.now()
+    today_start = datetime(now.year, now.month, now.day)
+    
+    today_articles = []
+    for art_id, info in known_articles_db.items():
+        if info.get("detected_at", now) >= today_start:
+            today_articles.append(info)
+            
+    # ترتيب تصاعدي من الأقدم إلى الأحدث اليوم
+    today_articles.sort(key=lambda x: x.get("detected_at", now))
+    
+    report_msg = (
+        f"🟢 **تأكيد حالة البوت وقائمة اليوم (كل 30 دقيقة):**\n"
+        f"📅 **التاريخ:** {now.strftime('%Y-%m-%d %H:%M')}\n"
+        f"• البوت يعمل بنشاط وبدون مشاكل.\n"
+        f"• إجمالي العملات والإعلانات المرصودة اليوم: `{len(today_articles)}`\n"
+        f"----------------------------------------\n"
+    )
+    
+    if not today_articles:
+        report_msg += "لا توجد إعلانات أو عملات مرصودة حتى الآن لهذا اليوم."
+        send_telegram_message(report_msg)
+    else:
+        send_telegram_message(report_msg)
+        for idx, art in enumerate(today_articles, 1):
+            t_str = art["detected_at"].strftime("%H:%M:%S")
+            code = art.get("code", "")
+            article_url = f"https://www.binance.com/en/support/announcement/{code}" if code else "https://www.binance.com/en/support/announcement"
+            
+            item_msg = (
+                f"🔹 **#{idx}** `{t_str}` - {art['title']}\n"
+                f"🔗 [رابط الإعلان]({article_url})"
+            )
+            send_telegram_message(item_msg)
+            time.sleep(1)
 
 def main():
     logging.info("Starting Binance Announcements Monitoring Bot...")
@@ -128,18 +129,14 @@ def main():
     logging.info(f"Loaded {len(known_articles_db)} existing announcements. Bot active...")
 
     startup_msg = (
-        "🤖 **تم تشغيل بوت التتبع والتحليل المتقدم!**\n\n"
-        "✅ مراقبة فورية لإعلانات **Binance Official Announcements**.\n"
-        "⏰ تأكيد حالة كل 30 دقيقة.\n"
-        f"📊 **تقرير شامل وتحليلي كل 6 ساعات** لإعلانات الـ {REPORT_DAYS_WINDOW} أيام الماضية."
+        "🤖 **تم تشغيل بوت التتبع المحدث!**\n\n"
+        "✅ مراقبة فورية لإعلانات **Binance Official Announcements** كل 5 ثوانٍ.\n"
+        "⏰ إرسال قائمة عملات وإعلانات اليوم مرتبة تصاعدياً كل 30 دقيقة.\n"
+        "🔔 تكرار التنبيه الفوري عند صدور أي عملة جديدة 5 مرات (بين كل تنبيه 5 دقائق)."
     )
     send_telegram_message(startup_msg)
 
-    # إرسال التقرير الشامل فوراً عند التشغيل
-    generate_and_send_report()
-
     last_heartbeat_time = time.time()
-    last_report_time = time.time()
 
     while True:
         try:
@@ -164,22 +161,15 @@ def main():
                     }
                     known_articles_db[art_id] = art_data
                     
-                    send_announcement_alert(art)
+                    # إطلاق التنبيه الفوري المكرر 5 مرات
+                    trigger_repeated_alert(art)
 
             current_time = time.time()
             
+            # تقرير الـ 30 دقيقة مع إظهار العملات مرتبة تصاعدياً
             if current_time - last_heartbeat_time >= HEARTBEAT_INTERVAL:
-                heartbeat_msg = (
-                    "🟢 **تأكيد حالة البوت (كل 30 دقيقة):**\n\n"
-                    "• البوت يعمل بنشاط وبدون مشاكل.\n"
-                    f"• إجمالي الإعلانات المحفوظة بالسجلات: `{len(known_articles_db)}`"
-                )
-                send_telegram_message(heartbeat_msg)
+                send_daily_status_report()
                 last_heartbeat_time = current_time
-
-            if current_time - last_report_time >= REPORT_INTERVAL:
-                generate_and_send_report()
-                last_report_time = current_time
 
         except Exception as e:
             logging.error(f"Main loop error: {e}")
