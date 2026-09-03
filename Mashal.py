@@ -12,7 +12,7 @@ HEARTBEAT_INTERVAL = 1800      # رسالة التأكيد (كل 30 دقيقة)
 REPORT_INTERVAL = 21600        # إرسال التقرير الشامل (كل 6 ساعات)
 
 # 👈 غير هذا الرقم لتحديد مدة التقرير بالأيام (مثلاً: 7 لتقرير 7 أيام)
-REPORT_DAYS_WINDOW = 4         
+REPORT_DAYS_WINDOW = 10         
 
 BINANCE_WEB3_API = "https://web3.binance.com/api/v1/dex/market/tokens"
 
