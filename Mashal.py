@@ -8,15 +8,15 @@ from datetime import datetime, timezone, timedelta
 TELEGRAM_BOT_TOKEN = "8695941579:AAF3dMqXMB6kMzuVXFvg5yBMqFltUZ0vOz8"
 TELEGRAM_CHAT_ID = "1777406294"
 
-CHECK_INTERVAL = 20           # فحص التريند كل 20 ثانية
-TWO_HOURS_INTERVAL = 7200     # تقرير كل ساعتين
+CHECK_INTERVAL = 20         # فحص التريند كل 20 ثانية
+FOUR_HOURS_INTERVAL = 14400 # تقرير كل 4 ساعات (14400 ثانية)
 
 # DEXScreener Endpoints
 DEX_TRENDING_API = "https://api.dexscreener.com/token-boosts/top/v1"
 DEX_PAIR_API = "https://api.dexscreener.com/latest/dex/tokens/"
 
 known_trending_tokens = set()
-today_logged_tokens = []  # العملات التي دخلت اليوم (لتسجيل تقرير الساعتين)
+today_logged_tokens = []  # العملات التي دخلت اليوم لتتبعها في التقرير
 last_utc_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -38,7 +38,7 @@ def send_telegram_message(text):
         return False
 
 def get_token_details(token_address):
-    """جلب بيانات ومؤشرات العملة"""
+    """جلب بيانات ومؤشرات العملة الحالية من DEXScreener"""
     try:
         res = requests.get(f"{DEX_PAIR_API}{token_address}", timeout=10)
         if res.status_code == 200:
@@ -53,20 +53,22 @@ def get_token_details(token_address):
 
 def evaluate_token_advisory(liquidity, mcap, vol_24h):
     """إعطاء رأي استشاري وتقييم المخاطر"""
-    if liquidity < 10000:
+    if liquidity < 1000:
+        return "🚨 **تحذير عالي (Rug Pull / احتيال)** - تم سحب معظم السيولة!"
+    elif liquidity < 10000:
         return "⚠️ **توخي الحذر الشديد** (السيولة متدنية جداً - High Risk)"
     elif liquidity < 40000:
-        return "👀 **تحت الملاحظة** (سيولة متوسطة - لا يُنصح بضخ مبالغ كبيرة)"
+        return "👀 **تحت الملاحظة** (سيولة متوسطة)"
     elif liquidity >= 40000 and vol_24h > 100000:
         ratio = (vol_24h / mcap) if mcap > 0 else 0
         if ratio > 0.6:
-            return "🔥 **فرصة واعدة للتداول اليومي** (نشاط وتدفق سيولة قوي جداً)"
+            return "🔥 **فرصة واعدة للتداول اليومي** (نشاط وتدفق سيولة قوي)"
         return "✅ **جيدة ومستقرة** (سيولة وتداول متوازنان)"
     else:
         return "👀 **تحت الملاحظة والترقب**"
 
-def format_instant_alert(pair_data, alert_num=1):
-    """تنسيق التنبيه الفوري المكرر 3 مرات مع عقد قابل للنسخ السريع"""
+def send_instant_alert(pair_data):
+    """إرسال تنبيه فوري مرّة واحدة فقط فور رصد العملة الجديدة"""
     base = pair_data.get("baseToken", {})
     symbol = base.get("symbol", "N/A")
     name = base.get("name", "N/A")
@@ -85,61 +87,76 @@ def format_instant_alert(pair_data, alert_num=1):
     bot_advisory = evaluate_token_advisory(liquidity, mcap, vol_24h)
     
     msg = (
-        f"🚀 **تنبيه عملة جديدة في (رائجة / Trending)!** (إشعار {alert_num}/3)\n\n"
+        f"🚀 **تنبيه عملة جديدة في (رائجة / Trending)!**\n\n"
         f"🪙 **العملة:** {name} (`{symbol}`)\n"
         f"🌐 **الشبكة:** `{chain}`\n\n"
         f"📋 **العقد (اضغط للنسخ السريع):**\n`{address}`\n\n"
         f"💵 **السعر الحالي:** `${price}`\n"
-        f"💧 **السيولة (Liquidity):** `${liquidity:,.2f}`\n"
-        f"📊 **القيمة السوقية (Market Cap):** `${mcap:,.2f}`\n"
+        f"💧 **السيولة:** `${liquidity:,.2f}`\n"
+        f"📊 **القيمة السوقية:** `${mcap:,.2f}`\n"
         f"📈 **حجم التداول 24س:** `${vol_24h:,.2f}`\n"
         f"⏰ **توقيت الإصدار:** `{utc_launch}`\n\n"
         f"🧠 **الرأي الاستشاري وتقييم المخاطر:**\n{bot_advisory}\n\n"
-        f"🔗 [تداول واعرض الرسم البياني على DEX]({dex_url})\n"
-        f"⏱️ *تنبيه مكرر (3 مرات كل 5 دقائق).* "
+        f"🔗 [تداول واعرض الرسم البياني على DEX]({dex_url})"
     )
-    return msg
+    send_telegram_message(msg)
 
-def repeat_alert_3_times(pair_data):
-    """تكرار التنبيه الفوري 3 مرات يفصل بينها 5 دقائق"""
-    for i in range(1, 4):
-        msg = format_instant_alert(pair_data, alert_num=i)
-        send_telegram_message(msg)
-        if i < 3:
-            time.sleep(300)
-
-def send_two_hours_report():
-    """تقرير كل ساعتين بالعملات المضافة اليوم بتوقيت UTC"""
+def send_four_hours_report():
+    """تقرير شامل كل 4 ساعات مع فحص حقيقي لحالة العملات ورصد سحب السيولة"""
     now_utc = datetime.now(timezone.utc)
     report_msg = (
-        f"📊 **تقرير العملات الرائجة المضافة اليوم (كل ساعتين):**\n"
+        f"📊 **التقرير الدائري المحدث (كل 4 ساعات):**\n"
         f"🌐 **التوقيت:** `{now_utc.strftime('%Y-%m-%d %H:%M UTC')}`\n"
-        f"• عدد العملات المرصودة حتى الآن اليوم: `{len(today_logged_tokens)}`\n"
+        f"• إجمالي العملات المرصودة اليوم: `{len(today_logged_tokens)}`\n"
         f"----------------------------------------\n"
     )
     send_telegram_message(report_msg)
     
-    if today_logged_tokens:
-        for idx, item in enumerate(today_logged_tokens, 1):
+    if not today_logged_tokens:
+        send_telegram_message("لم تُضَف أي عملات جديدة حتى الآن هذا اليوم.")
+        return
+
+    for idx, item in enumerate(today_logged_tokens, 1):
+        # جلب البيانات الحية المحدثة للعملة الآن
+        current_pair = get_token_details(item['address'])
+        
+        if current_pair:
+            curr_price = current_pair.get("priceUsd", "0")
+            curr_liq = float(current_pair.get("liquidity", {}).get("usd", 0) or 0)
+            curr_vol = float(current_pair.get("volume", {}).get("h24", 0) or 0)
+            
+            # كشف سحب السيولة (Rug Pull)
+            if curr_liq < 500:
+                status_str = "🚨 **[Rug Pull / احتيال - تم سحب السيولة]**"
+            else:
+                initial_liq = item['initial_liquidity']
+                liq_change = ((curr_liq - initial_liq) / initial_liq * 100) if initial_liq > 0 else 0
+                status_str = f"🟢 **نشطة** (تغير السيولة: `{liq_change:+.1f}%`)"
+
             t_msg = (
                 f"🔹 **#{idx}** `{item['time_utc']} UTC` - **{item['symbol']}** ({item['chain']})\n"
                 f"📋 العقد: `{item['address']}` 👈 *(اضغط للنسخ)*\n"
-                f"💵 السعر: `${item['price']}` | 💧 السيولة: `${item['liquidity']:,.0f}` | 📈 التداول: `${item['volume']:,.0f}`"
+                f"📌 **الحالة الحالية:** {status_str}\n"
+                f"💵 السعر: `${curr_price}` | 💧 السيولة الحالية: `${curr_liq:,.0f}` | 📈 التداول: `${curr_vol:,.0f}`"
             )
-            send_telegram_message(t_msg)
-            time.sleep(1)
-    else:
-        send_telegram_message("لم تُضَف أي عملات جديدة حتى الآن هذا اليوم.")
+        else:
+            # في حال تم حذف زوج التداول تماماً من المنصة
+            t_msg = (
+                f"🔹 **#{idx}** `{item['time_utc']} UTC` - **{item['symbol']}** ({item['chain']})\n"
+                f"📋 العقد: `{item['address']}` 👈 *(اضغط للنسخ)*\n"
+                f"📌 **الحالة الحالية:** 🚨 **[تم حذف الزوج / احتمال احتيال مؤكد]**"
+            )
+            
+        send_telegram_message(t_msg)
+        time.sleep(1)
 
 def send_end_of_day_best_5_report():
-    """تقرير نهاية اليوم (UTC): جلب أفضل 5 عملات متصدرة القائمة عموماً ومناسبة للتداول اليومي"""
+    """تقرير نهاية اليوم (UTC): أفضل 5 عملات متصدرة القائمة للتداول اليومي"""
     now_utc = datetime.now(timezone.utc)
-    
-    # جلب القائمة الكاملة الحالية من قائمة رائجة
     trending_raw = fetch_trending_tokens()
     all_pairs = []
     
-    for item in trending_raw[:25]:  # أخذ أفضل 25 عملة في التريند للتحليل
+    for item in trending_raw[:25]:
         addr = item.get("tokenAddress")
         if addr:
             pair = get_token_details(addr)
@@ -151,7 +168,6 @@ def send_end_of_day_best_5_report():
         send_telegram_message(msg)
         return
 
-    # ترتيب العملات المتاحة بالقائمة حالياً حسب السيولة وحجم التداول (أفضل عملات التداول اليومي)
     all_pairs.sort(
         key=lambda x: (
             float(x.get("liquidity", {}).get("usd", 0) or 0) + 
@@ -215,7 +231,7 @@ def fetch_trending_tokens():
     return []
 
 def main():
-    logging.info("Starting Web3 Trending Monitor with Copyable Contracts...")
+    logging.info("Starting Web3 Trending Monitor with Live Status & 4H Reports...")
     
     initial_tokens = fetch_trending_tokens()
     for item in initial_tokens:
@@ -225,14 +241,13 @@ def main():
 
     startup_msg = (
         "🤖 **تم تشغيل البوت المحدث بنجاح!**\n\n"
-        "📋 **العقود:** جميع عناوين العقود أصبحت سهلة للنسخ السريع بنقرة واحدة.\n"
-        "⚡ **التنبيه الفوري:** 3 مرات كل 5 دقائق مع التفاصيل والرأي الاستشاري.\n"
-        "📊 **تقرير كل ساعتين:** بالعملات المضافة اليوم.\n"
-        "🏆 **تقرير نهاية اليوم (UTC):** أفضل 5 عملات متصدرة القائمة عموماً للتداول اليومي."
+        "⚡ **التنبيه الفوري:** تنبيه واحد فقط لكل عملة جديدة بدقة عالية.\n"
+        "📊 **تقرير كل 4 ساعات:** تقرير شامل ببيانات حية ومباشرة لكشف عملات سحب السيولة (Rug Pull).\n"
+        "🏆 **تقرير نهاية اليوم (UTC):** أفضل 5 عملات مناسبة للتداول اليومي."
     )
     send_telegram_message(startup_msg)
 
-    last_two_hours_time = time.time()
+    last_four_hours_time = time.time()
 
     while True:
         try:
@@ -257,18 +272,17 @@ def main():
                             "symbol": base.get("symbol", "N/A"),
                             "chain": pair_data.get("chainId", "N/A").upper(),
                             "address": base.get("address", "N/A"),
-                            "price": pair_data.get("priceUsd", "0"),
-                            "liquidity": float(pair_data.get("liquidity", {}).get("usd", 0) or 0),
-                            "volume": float(pair_data.get("volume", {}).get("h24", 0) or 0),
-                            "url": pair_data.get("url", "#")
+                            "initial_liquidity": float(pair_data.get("liquidity", {}).get("usd", 0) or 0)
                         }
                         today_logged_tokens.append(token_info)
                         
-                        threading.Thread(target=repeat_alert_3_times, args=(pair_data,), daemon=True).start()
+                        # إرسال تنبيه واحد فقط بدون تكرار
+                        send_instant_alert(pair_data)
 
-            if time.time() - last_two_hours_time >= TWO_HOURS_INTERVAL:
-                send_two_hours_report()
-                last_two_hours_time = time.time()
+            # إرسال التقرير الشامل كل 4 ساعات
+            if time.time() - last_four_hours_time >= FOUR_HOURS_INTERVAL:
+                send_four_hours_report()
+                last_four_hours_time = time.time()
 
         except Exception as e:
             logging.error(f"Main loop error: {e}")
